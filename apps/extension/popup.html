@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        width: 280px;
+        padding: 16px;
+        font-family: system-ui, sans-serif;
+        background: #0a0a0a;
+        color: #fff;
+      }
+      h1 { font-size: 16px; margin-bottom: 12px; }
+      label { display: block; font-size: 12px; color: #999; margin-bottom: 4px; }
+      input {
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid #333;
+        border-radius: 6px;
+        background: #1a1a1a;
+        color: #fff;
+        font-size: 13px;
+        margin-bottom: 10px;
+      }
+      .tabs { display: flex; border-radius: 6px; background: #1a1a1a; padding: 3px; margin-bottom: 12px; }
+      .tab {
+        flex: 1; padding: 5px; border: none; border-radius: 4px; cursor: pointer;
+        background: transparent; color: #888; font-size: 12px; font-weight: 500;
+      }
+      .tab.active { background: #fff; color: #000; }
+      button.primary {
+        width: 100%; padding: 9px; border: none; border-radius: 6px;
+        background: #2563eb; color: #fff; font-size: 13px; font-weight: 600;
+        cursor: pointer;
+      }
+      button.primary:hover { background: #3b82f6; }
+      button.danger {
+        width: 100%; padding: 9px; border: none; border-radius: 6px;
+        background: #dc2626; color: #fff; font-size: 13px; font-weight: 600;
+        cursor: pointer; margin-top: 8px;
+      }
+      #status { font-size: 12px; color: #4ade80; margin-top: 10px; min-height: 16px; }
+      #error { font-size: 12px; color: #f87171; margin-top: 4px; min-height: 16px; }
+      .code-badge {
+        display: inline-block; background: #1a1a1a; border: 1px solid #333;
+        border-radius: 4px; padding: 4px 8px; font-family: monospace; font-size: 18px;
+        letter-spacing: 3px; margin: 8px 0;
+      }
+      #sharing-view { display: none; }
+      #sharing-view.active { display: block; }
+      #form-view.hidden { display: none; }
+    </style>
+  </head>
+  <body>
+    <h1>🎬 Creiai Cinema</h1>
+
+    <!-- Form view -->
+    <div id="form-view">
+      <div class="tabs">
+        <button class="tab active" id="tab-create">Crear sala</button>
+        <button class="tab" id="tab-join">Unirse</button>
+      </div>
+
+      <label>Tu nombre</label>
+      <input id="name" type="text" placeholder="Ej. Juan" maxlength="24" />
+
+      <div id="join-extras" style="display:none">
+        <label>Código de sala</label>
+        <input id="code" type="text" placeholder="ABC123" maxlength="6" style="text-transform:uppercase" />
+      </div>
+
+      <button class="primary" id="btn-start">Compartir esta pestaña</button>
+      <div id="error"></div>
+    </div>
+
+    <!-- Sharing view -->
+    <div id="sharing-view">
+      <p style="font-size:13px;color:#999;margin-bottom:6px;">Compartiendo en sala</p>
+      <div class="code-badge" id="room-code">——</div>
+      <p style="font-size:11px;color:#666;margin-top:4px;margin-bottom:10px;">Manda este link a tus amigos:</p>
+      <div style="display:flex;gap:6px;margin-bottom:12px;">
+        <input
+          id="room-link"
+          type="text"
+          readonly
+          style="flex:1;font-size:11px;padding:6px 8px;cursor:text;"
+        />
+        <button id="btn-copy" style="
+          padding:6px 10px;border:none;border-radius:6px;
+          background:#374151;color:#fff;font-size:11px;cursor:pointer;white-space:nowrap;
+        ">Copiar</button>
+      </div>
+      <button class="danger" id="btn-stop">Detener</button>
+    </div>
+
+    <div id="status"></div>
+
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>

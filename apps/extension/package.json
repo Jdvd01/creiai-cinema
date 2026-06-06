@@ -1,0 +1,21 @@
+{
+  "name": "@cinema/extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "vite build && node scripts/package.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cinema/shared": "workspace:*",
+    "livekit-client": "^2.5.8",
+    "socket.io-client": "^4.7.5"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.270",
+    "typescript": "^5.4.5",
+    "vite": "^5.3.1"
+  }
+}
