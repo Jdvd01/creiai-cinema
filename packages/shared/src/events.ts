@@ -14,6 +14,8 @@ export interface RoomCreateResponse {
   code: string;
   livekitUrl: string;
   livekitToken: string;
+  /** Opaque secret the host must include in state:report to authenticate reconnects */
+  hostKey: string;
 }
 
 export interface RoomJoinPayload {
@@ -70,7 +72,7 @@ export interface ClientToServerEvents {
     cb: (res: RoomJoinResponse) => void
   ) => void;
   "control:action": (payload: { code: string; action: ControlAction }) => void;
-  "state:report": (payload: { code: string; state: PlaybackState }) => void;
+  "state:report": (payload: { code: string; state: PlaybackState; hostKey: string }) => void;
 }
 
 /**

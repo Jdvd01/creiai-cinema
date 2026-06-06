@@ -1,4 +1,4 @@
-# Cinema 🎬
+# Creiai Cinema 🎬
 
 Sala virtual para ver películas sincronizadas con amigos.
 

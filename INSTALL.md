@@ -1,4 +1,4 @@
-# Cómo instalar la extensión de Cinema (host)
+# Cómo instalar la extensión de Creiai Cinema (host)
 
 Solo necesitas la extensión si vas a **compartir pantalla** (ser host). Los que solo miran entran a la web directamente.
 
@@ -17,9 +17,9 @@ Solo necesitas la extensión si vas a **compartir pantalla** (ser host). Los que
 
 5. Clic en **"Cargar descomprimida"** → selecciona la carpeta `cinema-extension`.
 
-6. Clic en el icono 🧩 de Chrome → fija (pin) la extensión Cinema.
+6. Clic en el icono 🧩 de Chrome → fija (pin) la extensión Creiai Cinema.
 
-7. Para compartir: abre la película en una pestaña → clic en el icono Cinema → escribe el código de sala → "Compartir".
+7. Para compartir: abre la película en una pestaña → clic en el icono Creiai Cinema → escribe el código de sala → "Compartir".
 
 ## Notas
 
