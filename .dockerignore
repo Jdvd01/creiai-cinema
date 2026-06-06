@@ -1,0 +1,10 @@
+.git
+**/node_modules
+**/.next
+**/dist
+*.zip
+.env
+.env.local
+apps/extension/src
+apps/extension/dist
+apps/extension/icons

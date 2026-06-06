@@ -1,0 +1,31 @@
+FROM node:20-alpine AS builder
+RUN npm install -g pnpm
+WORKDIR /app
+
+# Install deps (cached layer — only package.json files)
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/shared/package.json ./packages/shared/
+COPY server/package.json ./server/
+COPY apps/web/package.json ./apps/web/
+COPY apps/extension/package.json ./apps/extension/
+RUN pnpm install --frozen-lockfile
+
+# Build
+COPY packages/shared ./packages/shared
+COPY server ./server
+RUN pnpm --filter=shared build && pnpm --filter=server build
+
+FROM node:20-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+
+# node_modules includes pnpm virtual store + symlinks to packages/shared
+COPY --from=builder /app/node_modules ./node_modules
+# Resolve workspace symlink target
+COPY --from=builder /app/packages/shared/dist ./packages/shared/dist
+COPY --from=builder /app/packages/shared/package.json ./packages/shared/package.json
+# Server build output
+COPY --from=builder /app/server/dist ./server/dist
+
+EXPOSE 3001
+CMD ["node", "server/dist/index.js"]
