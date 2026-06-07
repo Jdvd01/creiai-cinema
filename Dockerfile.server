@@ -26,6 +26,8 @@ COPY --from=builder /app/packages/shared/dist ./packages/shared/dist
 COPY --from=builder /app/packages/shared/package.json ./packages/shared/package.json
 # Server build output
 COPY --from=builder /app/server/dist ./server/dist
+# pnpm per-package symlinks (dotenv, express, etc. resolve via these)
+COPY --from=builder /app/server/node_modules ./server/node_modules
 
 EXPOSE 3001
 CMD ["node", "server/dist/index.js"]
