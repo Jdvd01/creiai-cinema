@@ -177,6 +177,9 @@ export function RoomView({ code }: Props) {
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
   const [optimisticPaused, setOptimisticPaused] = useState<boolean | null>(null);
+  const [optimisticRate, setOptimisticRate] = useState<number | null>(null);
+  const [streamStartedAt, setStreamStartedAt] = useState<number | null>(null);
+  const [liveSeconds, setLiveSeconds] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showPeers, setShowPeers] = useState(false);
   const [showSpeed, setShowSpeed] = useState(false);
@@ -221,8 +224,19 @@ export function RoomView({ code }: Props) {
       if (storedState) {
         try { setPlaybackState(JSON.parse(storedState)); } catch { /* ignore */ }
       }
+      const storedCreatedAt = sessionStorage.getItem(`created_${code}`);
+      if (storedCreatedAt) setStreamStartedAt(Number(storedCreatedAt));
     }
   }, [code]);
+
+  // ── "Time live" counter ───────────────────────────────────────────────────
+  useEffect(() => {
+    if (!streamStartedAt) return;
+    const tick = () => setLiveSeconds(Math.max(0, Math.floor((Date.now() - streamStartedAt) / 1000)));
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [streamStartedAt]);
 
   // ── LiveKit connection ────────────────────────────────────────────────────
   useEffect(() => {
@@ -297,6 +311,7 @@ export function RoomView({ code }: Props) {
     socket.on("state:update", (state) => {
       setPlaybackState(state);
       setOptimisticPaused(null);
+      setOptimisticRate(null);
     });
     return () => {
       socket.off("room:peers");
@@ -315,7 +330,7 @@ export function RoomView({ code }: Props) {
   const effectivePaused = optimisticPaused ?? playbackState?.paused ?? false;
   const duration = playbackState?.duration ?? 0;
   const currentTime = playbackState?.currentTime ?? 0;
-  const currentRate = playbackState?.rate ?? 1;
+  const currentRate = optimisticRate ?? playbackState?.rate ?? 1;
 
   const handlePlayPause = useCallback(() => {
     const next = !effectivePaused;
@@ -409,6 +424,8 @@ export function RoomView({ code }: Props) {
           setLkToken(token);
           setLkUrl(url);
           if (initialState) setPlaybackState(initialState);
+          const storedCreatedAt = sessionStorage.getItem(`created_${code}`);
+          if (storedCreatedAt) setStreamStartedAt(Number(storedCreatedAt));
         }}
       />
     );
@@ -483,6 +500,15 @@ export function RoomView({ code }: Props) {
                 {code}
               </code>
               <ConnectionBadge state={connectionState} />
+              {streamStartedAt !== null && (
+                <span
+                  className="flex items-center gap-1.5 text-xs text-neutral-400"
+                  title="Tiempo en vivo"
+                >
+                  <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+                  {formatTime(liveSeconds)}
+                </span>
+              )}
             </div>
 
             {/* Participants dropdown */}
@@ -626,7 +652,7 @@ export function RoomView({ code }: Props) {
                 {SPEEDS.map((r) => (
                   <button
                     key={r}
-                    onClick={() => { sendControl({ type: "rate", rate: r }); setShowSpeed(false); }}
+                    onClick={() => { setOptimisticRate(r); sendControl({ type: "rate", rate: r }); setShowSpeed(false); }}
                     className={`flex w-full items-center justify-between px-4 py-2 text-sm transition-colors hover:bg-white/10 ${
                       currentRate === r ? "font-medium text-blue-400" : "text-white"
                     }`}
@@ -747,6 +773,7 @@ function JoinPrompt({ code, onJoined }: JoinPromptProps) {
         sessionStorage.setItem("my_name", name.trim());
         sessionStorage.setItem("my_role", "viewer");
         if (res.state) sessionStorage.setItem(`state_${code}`, JSON.stringify(res.state));
+        if (res.createdAt) sessionStorage.setItem(`created_${code}`, String(res.createdAt));
         onJoined(res.livekitToken!, res.livekitUrl!, "viewer", res.state);
       }
     );

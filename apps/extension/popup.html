@@ -13,7 +13,7 @@
       }
       h1 { font-size: 16px; margin-bottom: 12px; }
       label { display: block; font-size: 12px; color: #999; margin-bottom: 4px; }
-      input {
+      input, select {
         width: 100%;
         padding: 8px 10px;
         border: 1px solid #333;
@@ -65,6 +65,12 @@
       <label>Tu nombre</label>
       <input id="name" type="text" placeholder="Ej. Juan" maxlength="24" />
 
+      <label>Calidad de transmisión</label>
+      <select id="quality"></select>
+
+      <label>Cuadros por segundo (FPS)</label>
+      <select id="fps"></select>
+
       <div id="join-extras" style="display:none">
         <label>Código de sala</label>
         <input id="code" type="text" placeholder="ABC123" maxlength="6" style="text-transform:uppercase" />
@@ -78,6 +84,7 @@
     <div id="sharing-view">
       <p style="font-size:13px;color:#999;margin-bottom:6px;">Compartiendo en sala</p>
       <div class="code-badge" id="room-code">——</div>
+      <p style="font-size:12px;color:#4ade80;margin:2px 0 6px;">⏱ <span id="live-duration">0:00</span> en vivo</p>
       <p style="font-size:11px;color:#666;margin-top:4px;margin-bottom:10px;">Manda este link a tus amigos:</p>
       <div style="display:flex;gap:6px;margin-bottom:12px;">
         <input

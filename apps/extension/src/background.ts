@@ -5,19 +5,31 @@
 import { io, type Socket } from "socket.io-client";
 import type { ClientToServerEvents, ServerToClientEvents, ControlAction, PlaybackState } from "@cinema/shared";
 import { log, warn, error } from "./logger";
+import { DEFAULT_QUALITY, DEFAULT_FPS, type QualityKey, type FpsOption } from "./quality";
 
 declare const __SERVER_URL__: string;
 
 type AppSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
+
+// Inbound runtime messages — typed union so handlers below get narrowed
+// fields instead of reading off an `any`-shaped `msg`.
+type InboundMessage =
+  | { type: "CREATE_ROOM"; tabId: number; hostName: string; quality?: QualityKey; fps?: FpsOption }
+  | { type: "JOIN_ROOM"; tabId: number; code: string; hostName: string; quality?: QualityKey; fps?: FpsOption }
+  | { type: "STOP_SHARING" }
+  | { type: "STATE_REPORT"; state: PlaybackState }
+  | { type: "GET_STATUS" }
+  | { type: "FORWARD_TO_CONTENT"; inner: unknown };
 
 let socket: AppSocket | null = null;
 let currentRoom: string | null = null;
 let capturedTabId: number | null = null;
 let hostKey: string | null = null;
 let offscreenCreated = false;
+let startedAt: number | null = null;
 
 // Keys persisted in chrome.storage.session so SW restart can restore state
-const SESSION_KEYS = ["currentRoom", "capturedTabId", "livekitUrl", "livekitToken", "hostKey"] as const;
+const SESSION_KEYS = ["currentRoom", "capturedTabId", "livekitUrl", "livekitToken", "hostKey", "quality", "fps", "startedAt"] as const;
 
 // ── Socket ────────────────────────────────────────────────────────────────────
 
@@ -32,9 +44,7 @@ function getSocket(): AppSocket {
     socket.on("control:action", (action: ControlAction) => {
       log("[cinema bg] control:action received:", action.type, "capturedTabId:", capturedTabId);
       if (capturedTabId !== null) {
-        chrome.tabs.sendMessage(capturedTabId, { type: "CONTROL", action }).catch((err) => {
-          error("[cinema bg] sendMessage to content script failed:", err);
-        });
+        sendToContentScript(capturedTabId, { type: "CONTROL", action });
       } else {
         warn("[cinema bg] control:action dropped — capturedTabId is null");
       }
@@ -46,6 +56,23 @@ function getSocket(): AppSocket {
     });
   }
   return socket;
+}
+
+// Tab navigation tears down the old content script; the manifest only
+// re-injects on fresh document loads, leaving a gap where messages bounce
+// with "Receiving end does not exist". Re-inject once and retry.
+async function sendToContentScript(tabId: number, msg: unknown) {
+  try {
+    await chrome.tabs.sendMessage(tabId, msg);
+  } catch (err) {
+    warn("[cinema bg] sendMessage failed, re-injecting content script:", err);
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
+      await chrome.tabs.sendMessage(tabId, msg);
+    } catch (retryErr) {
+      error("[cinema bg] sendMessage retry after re-inject failed:", retryErr);
+    }
+  }
 }
 
 // ── SW restart recovery ───────────────────────────────────────────────────────
@@ -60,6 +87,9 @@ async function restoreSessionAfterRestart() {
     livekitUrl?: string;
     livekitToken?: string;
     hostKey?: string;
+    quality?: QualityKey;
+    fps?: FpsOption;
+    startedAt?: number;
   };
 
   if (!stored.currentRoom || !stored.capturedTabId || !stored.livekitUrl || !stored.livekitToken || !stored.hostKey) return;
@@ -68,10 +98,11 @@ async function restoreSessionAfterRestart() {
   currentRoom = stored.currentRoom;
   capturedTabId = stored.capturedTabId;
   hostKey = stored.hostKey;
+  startedAt = stored.startedAt ?? Date.now();
 
   // Restart offscreen capture so stream and state reporting resume
   try {
-    await startCapture(stored.capturedTabId, stored.livekitUrl, stored.livekitToken);
+    await startCapture(stored.capturedTabId, stored.livekitUrl, stored.livekitToken, stored.quality ?? DEFAULT_QUALITY, stored.fps ?? DEFAULT_FPS);
   } catch (err) {
     error("[cinema] Failed to restart capture after SW restart:", err);
     await chrome.storage.session.remove(SESSION_KEYS as unknown as string[]);
@@ -82,9 +113,9 @@ async function restoreSessionAfterRestart() {
 
 // ── Messages from popup & content script ─────────────────────────────────────
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg: InboundMessage, _sender, sendResponse) => {
   if (msg.type === "CREATE_ROOM") {
-    handleCreateRoom(msg.tabId, msg.hostName)
+    handleCreateRoom(msg.tabId, msg.hostName, msg.quality, msg.fps)
       .then(sendResponse)
       .catch((err) => {
         error("[cinema] CREATE_ROOM failed:", err);
@@ -94,7 +125,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.type === "JOIN_ROOM") {
-    handleJoinRoom(msg.tabId, msg.code, msg.hostName)
+    handleJoinRoom(msg.tabId, msg.code, msg.hostName, msg.quality, msg.fps)
       .then(sendResponse)
       .catch((err) => {
         error("[cinema] JOIN_ROOM failed:", err);
@@ -110,13 +141,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.type === "STATE_REPORT") {
-    const state = msg.state as PlaybackState;
+    const state = msg.state;
     if (currentRoom && hostKey) getSocket().emit("state:report", { code: currentRoom, state, hostKey });
     return false;
   }
 
   if (msg.type === "GET_STATUS") {
-    sendResponse({ sharing: capturedTabId !== null, code: currentRoom });
+    sendResponse({ sharing: capturedTabId !== null, code: currentRoom, startedAt });
     return false;
   }
 
@@ -135,31 +166,39 @@ async function persistSession(
   tabId: number,
   livekitUrl: string,
   livekitToken: string,
+  quality: QualityKey,
+  fps: FpsOption,
   key = "",
 ): Promise<void> {
   currentRoom = code;
   capturedTabId = tabId;
   hostKey = key;
+  startedAt = Date.now();
   await chrome.storage.session.set({
     currentRoom: code,
     capturedTabId: tabId,
     livekitUrl,
     livekitToken,
     hostKey: key,
+    quality,
+    fps,
+    startedAt,
   });
 }
 
 async function handleCreateRoom(
   tabId: number,
-  hostName: string
+  hostName: string,
+  quality: QualityKey = DEFAULT_QUALITY,
+  fps: FpsOption = DEFAULT_FPS,
 ): Promise<{ ok: boolean; code?: string; error?: string }> {
   await ensureSocketConnected();
 
   return new Promise((resolve, reject) => {
     getSocket().emit("room:create", { hostName }, async (res) => {
       try {
-        await startCapture(tabId, res.livekitUrl, res.livekitToken);
-        await persistSession(res.code, tabId, res.livekitUrl, res.livekitToken, res.hostKey);
+        await startCapture(tabId, res.livekitUrl, res.livekitToken, quality, fps);
+        await persistSession(res.code, tabId, res.livekitUrl, res.livekitToken, quality, fps, res.hostKey);
         resolve({ ok: true, code: res.code });
       } catch (err) {
         reject(err);
@@ -171,7 +210,9 @@ async function handleCreateRoom(
 async function handleJoinRoom(
   tabId: number,
   code: string,
-  hostName: string
+  hostName: string,
+  quality: QualityKey = DEFAULT_QUALITY,
+  fps: FpsOption = DEFAULT_FPS,
 ): Promise<{ ok: boolean; error?: string }> {
   await ensureSocketConnected();
 
@@ -179,8 +220,8 @@ async function handleJoinRoom(
     getSocket().emit("room:join", { code, viewerName: hostName }, async (res) => {
       try {
         if (!res.ok) { resolve({ ok: false, error: res.error }); return; }
-        await startCapture(tabId, res.livekitUrl!, res.livekitToken!);
-        await persistSession(code, tabId, res.livekitUrl!, res.livekitToken!);
+        await startCapture(tabId, res.livekitUrl!, res.livekitToken!, quality, fps);
+        await persistSession(code, tabId, res.livekitUrl!, res.livekitToken!, quality, fps);
         resolve({ ok: true });
       } catch (err) {
         reject(err);
@@ -202,7 +243,7 @@ function ensureSocketConnected(): Promise<void> {
 
 // ── Tab capture + offscreen ───────────────────────────────────────────────────
 
-async function startCapture(tabId: number, livekitUrl: string, livekitToken: string) {
+async function startCapture(tabId: number, livekitUrl: string, livekitToken: string, quality: QualityKey, fps: FpsOption) {
   // Re-inject content script to ensure fresh context (extension reload invalidates old one)
   await chrome.scripting.executeScript({
     target: { tabId },
@@ -247,7 +288,7 @@ async function startCapture(tabId: number, livekitUrl: string, livekitToken: str
   ]);
 
   const streamId = await getTabCaptureStreamId(tabId);
-  chrome.runtime.sendMessage({ type: "START_PUBLISH", streamId, livekitUrl, livekitToken });
+  chrome.runtime.sendMessage({ type: "START_PUBLISH", streamId, livekitUrl, livekitToken, quality, fps });
 }
 
 async function getTabCaptureStreamId(tabId: number): Promise<string> {
@@ -271,6 +312,7 @@ function stopSharing() {
   currentRoom = null;
   capturedTabId = null;
   hostKey = null;
+  startedAt = null;
   chrome.storage.session.remove(SESSION_KEYS as unknown as string[]);
   socket?.disconnect();
   socket = null;

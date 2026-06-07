@@ -7,6 +7,8 @@ export interface Room {
   hostKey: string;
   peers: Map<string, PeerInfo>;
   lastState: PlaybackState | null;
+  /** Epoch ms when the room was created — basis for the "time live" counter */
+  createdAt: number;
 }
 
 const rooms = new Map<string, Room>();
@@ -35,6 +37,7 @@ export function createRoom(code: string, hostSocketId: string, hostName: string,
       ],
     ]),
     lastState: null,
+    createdAt: Date.now(),
   };
   rooms.set(code, room);
   return room;

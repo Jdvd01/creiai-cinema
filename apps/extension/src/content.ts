@@ -5,7 +5,12 @@
  * while the previous isolated-world instance may still be alive).
  */
 
-import { log, warn } from "./logger";
+// Inlined (not imported from ./logger): content scripts are injected as
+// classic scripts — any `import` statement in the bundle throws
+// "Cannot use import statement outside a module" and the script never runs.
+const { log: _log, warn: _warn } = console;
+const log = _log.bind(console) as (...args: unknown[]) => void;
+const warn = _warn.bind(console) as (...args: unknown[]) => void;
 
 // @ts-expect-error – isolated-world window property
 if (window.__cinemaContentScriptActive) {
@@ -49,7 +54,9 @@ function applyControl(action: { type: string; currentTime?: number; rate?: numbe
 
   switch (action.type) {
     case "play":
-      video.play().catch((e) => warn("[cinema] play() failed:", e));
+      // play() is async — `video.paused` may still read true right after
+      // calling it, so report again once the promise settles.
+      video.play().then(reportState).catch((e) => warn("[cinema] play() failed:", e));
       break;
     case "pause":
       video.pause();
@@ -64,24 +71,32 @@ function applyControl(action: { type: string; currentTime?: number; rate?: numbe
       if (action.rate !== undefined) video.playbackRate = action.rate;
       break;
   }
+
+  // Report immediately instead of waiting for the 1s poll — otherwise other
+  // viewers' UIs hold stale `paused`/`rate` and their next click computes
+  // `next = !effectivePaused` off that stale value, sending the wrong action
+  // (e.g. re-pausing an already-paused video) and forcing a second click.
+  reportState();
+}
+
+function reportState() {
+  const video = findVideo();
+  if (!video) return;
+  chrome.runtime.sendMessage({
+    type: "STATE_REPORT",
+    state: {
+      paused: video.paused,
+      currentTime: video.currentTime,
+      duration: video.duration || 0,
+      rate: video.playbackRate,
+      ts: Date.now(),
+    },
+  }).catch(() => {/* context invalidated */});
 }
 
 function startReporting() {
   if (reportInterval) clearInterval(reportInterval);
-  reportInterval = setInterval(() => {
-    const video = findVideo();
-    if (!video) return;
-    chrome.runtime.sendMessage({
-      type: "STATE_REPORT",
-      state: {
-        paused: video.paused,
-        currentTime: video.currentTime,
-        duration: video.duration || 0,
-        rate: video.playbackRate,
-        ts: Date.now(),
-      },
-    }).catch(() => {/* context invalidated */});
-  }, 1000);
+  reportInterval = setInterval(reportState, 1000);
 }
 
 function stopReporting() {

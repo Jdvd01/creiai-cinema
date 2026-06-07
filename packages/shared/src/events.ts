@@ -16,6 +16,8 @@ export interface RoomCreateResponse {
   livekitToken: string;
   /** Opaque secret the host must include in state:report to authenticate reconnects */
   hostKey: string;
+  /** Server epoch ms when the room was created — basis for the "time live" counter */
+  createdAt: number;
 }
 
 export interface RoomJoinPayload {
@@ -30,6 +32,8 @@ export interface RoomJoinResponse {
   livekitToken?: string;
   /** Current playback state so late joiners sync up */
   state?: PlaybackState;
+  /** Server epoch ms when the room was created — basis for the "time live" counter */
+  createdAt?: number;
 }
 
 export interface PeerInfo {

@@ -59,11 +59,11 @@ io.on("connection", (socket) => {
 
     const code = generateCode();
     const hostKey = randomBytes(32).toString("hex");
-    createRoom(code, socket.id, hostName, hostKey);
+    const room = createRoom(code, socket.id, hostName, hostKey);
     socket.join(code);
 
     const token = await createToken(code, hostName, "host");
-    cb({ code, livekitUrl: LIVEKIT_URL, livekitToken: token, hostKey });
+    cb({ code, livekitUrl: LIVEKIT_URL, livekitToken: token, hostKey, createdAt: room.createdAt });
 
     log(`[room] created ${code} by ${hostName}`);
   });
@@ -97,6 +97,7 @@ io.on("connection", (socket) => {
       livekitUrl: LIVEKIT_URL,
       livekitToken: token,
       state: room.lastState ?? undefined,
+      createdAt: room.createdAt,
     });
 
     log(`[room] ${viewerName} joined ${payload.code}`);

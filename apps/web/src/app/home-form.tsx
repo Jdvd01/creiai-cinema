@@ -31,6 +31,7 @@ export function HomeForm() {
         sessionStorage.setItem("lk_url", res.livekitUrl);
         sessionStorage.setItem("my_name", name.trim());
         sessionStorage.setItem("my_role", "host");
+        sessionStorage.setItem(`created_${res.code}`, String(res.createdAt));
         router.push(`/room/${res.code}`);
       });
     } else {
@@ -49,6 +50,7 @@ export function HomeForm() {
           sessionStorage.setItem("my_name", name.trim());
           sessionStorage.setItem("my_role", "viewer");
           if (res.state) sessionStorage.setItem(`state_${roomCode}`, JSON.stringify(res.state));
+          if (res.createdAt) sessionStorage.setItem(`created_${roomCode}`, String(res.createdAt));
           router.push(`/room/${roomCode}`);
         }
       );

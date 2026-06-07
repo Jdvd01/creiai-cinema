@@ -7,13 +7,14 @@
 
 import { Room, Track } from "livekit-client";
 import { error } from "./logger";
+import { resolveQuality, resolveFps } from "./quality";
 
 let livekitRoom: Room | null = null;
 let localAudio: HTMLAudioElement | null = null;
 
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "START_PUBLISH") {
-    startPublish(msg.streamId, msg.livekitUrl, msg.livekitToken).catch((err) => {
+    startPublish(msg.streamId, msg.livekitUrl, msg.livekitToken, msg.quality, msg.fps).catch((err) => {
       error("[cinema offscreen] startPublish failed:", err);
       stopPublish();
     });
@@ -26,7 +27,10 @@ chrome.runtime.onMessage.addListener((msg) => {
 // Signal background that this document is ready to receive messages.
 chrome.runtime.sendMessage({ type: "OFFSCREEN_READY" });
 
-async function startPublish(streamId: string, livekitUrl: string, livekitToken: string) {
+async function startPublish(streamId: string, livekitUrl: string, livekitToken: string, quality: unknown, fps: unknown) {
+  const preset = resolveQuality(quality);
+  const frameRate = resolveFps(fps);
+
   // Capture the tab stream (video + audio)
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: {
@@ -38,9 +42,9 @@ async function startPublish(streamId: string, livekitUrl: string, livekitToken: 
       mandatory: {
         chromeMediaSource: "tab",
         chromeMediaSourceId: streamId,
-        maxWidth: 1280,
-        maxHeight: 720,
-        maxFrameRate: 24,
+        maxWidth: preset.maxWidth,
+        maxHeight: preset.maxHeight,
+        maxFrameRate: frameRate,
       },
     },
   });
@@ -71,8 +75,8 @@ async function startPublish(streamId: string, livekitUrl: string, livekitToken: 
       name: "screen",
       source: Track.Source.ScreenShare,
       videoEncoding: {
-        maxBitrate: 3_000_000,
-        maxFramerate: 30,
+        maxBitrate: preset.maxBitrate,
+        maxFramerate: frameRate,
       },
       simulcast: false,
     });
