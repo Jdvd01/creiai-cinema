@@ -5,7 +5,7 @@ const steps = [
     n: 1,
     title: "Descargar el archivo",
     body: "Descarga el archivo cinema-extension.zip haciendo clic en el botón:",
-    download: "https://github.com/Jdvd01/creiai-cinema/releases/download/v1.0.6/cinema-extension.zip",
+    download: "https://github.com/Jdvd01/creiai-cinema/releases/download/v1.0.7/cinema-extension.zip",
   },
   {
     n: 2,
