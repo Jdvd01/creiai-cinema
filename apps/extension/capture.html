@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        width: 280px;
+        padding: 16px;
+        font-family: system-ui, sans-serif;
+        background: #0a0a0a;
+        color: #fff;
+      }
+      h1 { font-size: 16px; margin-bottom: 12px; }
+      p { font-size: 12px; color: #999; margin-bottom: 10px; }
+      button.primary {
+        width: 100%; padding: 9px; border: none; border-radius: 6px;
+        background: #2563eb; color: #fff; font-size: 13px; font-weight: 600;
+        cursor: pointer;
+      }
+      button.primary:hover { background: #3b82f6; }
+      button.primary:disabled { background: #1e3a8a; cursor: default; opacity: 0.6; }
+      button.danger {
+        width: 100%; padding: 9px; border: none; border-radius: 6px;
+        background: #dc2626; color: #fff; font-size: 13px; font-weight: 600;
+        cursor: pointer; margin-top: 8px;
+      }
+      #status { font-size: 12px; color: #4ade80; margin-top: 10px; min-height: 16px; }
+      #error { font-size: 12px; color: #f87171; margin-top: 4px; min-height: 16px; }
+      #picker-view.hidden, #live-view.hidden { display: none; }
+    </style>
+  </head>
+  <body>
+    <h1>🎬 Creiai Cinema</h1>
+
+    <div id="picker-view">
+      <p>Elige qué pantalla compartir. Tilda "compartir audio del sistema" para incluir el sonido.</p>
+      <button class="primary" id="btn-share">Compartir pantalla</button>
+    </div>
+
+    <div id="live-view" class="hidden">
+      <p style="color:#4ade80;">⏱ <span id="live-duration">0:00</span> en vivo</p>
+      <button class="danger" id="btn-stop">Detener</button>
+    </div>
+
+    <div id="status"></div>
+    <div id="error"></div>
+
+    <script type="module" src="capture.js"></script>
+  </body>
+</html>

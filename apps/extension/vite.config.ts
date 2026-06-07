@@ -10,7 +10,7 @@ function copyExtensionStatics() {
       mkdirSync(r("dist/icons"), { recursive: true });
       copyFileSync(r("manifest.json"), r("dist/manifest.json"));
       copyFileSync(r("popup.html"), r("dist/popup.html"));
-      copyFileSync(r("offscreen.html"), r("dist/offscreen.html"));
+      copyFileSync(r("capture.html"), r("dist/capture.html"));
       for (const s of [16, 48, 128]) {
         copyFileSync(r(`icons/icon${s}.png`), r(`dist/icons/icon${s}.png`));
       }
@@ -29,7 +29,7 @@ export default defineConfig(({ mode }) => {
         input: {
           background: resolve(__dirname, "src/background.ts"),
           content: resolve(__dirname, "src/content.ts"),
-          offscreen: resolve(__dirname, "src/offscreen.ts"),
+          capture: resolve(__dirname, "src/capture.ts"),
           popup: resolve(__dirname, "src/popup.ts"),
         },
         output: {

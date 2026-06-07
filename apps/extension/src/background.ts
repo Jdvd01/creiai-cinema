@@ -17,6 +17,7 @@ type InboundMessage =
   | { type: "CREATE_ROOM"; tabId: number; hostName: string; quality?: QualityKey; fps?: FpsOption }
   | { type: "JOIN_ROOM"; tabId: number; code: string; hostName: string; quality?: QualityKey; fps?: FpsOption }
   | { type: "STOP_SHARING" }
+  | { type: "CAPTURE_ENDED" }
   | { type: "STATE_REPORT"; state: PlaybackState }
   | { type: "GET_STATUS" }
   | { type: "FORWARD_TO_CONTENT"; inner: unknown };
@@ -25,7 +26,7 @@ let socket: AppSocket | null = null;
 let currentRoom: string | null = null;
 let capturedTabId: number | null = null;
 let hostKey: string | null = null;
-let offscreenCreated = false;
+let captureWindowId: number | null = null;
 let startedAt: number | null = null;
 
 // Keys persisted in chrome.storage.session so SW restart can restore state
@@ -94,21 +95,12 @@ async function restoreSessionAfterRestart() {
 
   if (!stored.currentRoom || !stored.capturedTabId || !stored.livekitUrl || !stored.livekitToken || !stored.hostKey) return;
 
-  log("[cinema] Restoring session after SW restart, room:", stored.currentRoom);
-  currentRoom = stored.currentRoom;
-  capturedTabId = stored.capturedTabId;
-  hostKey = stored.hostKey;
-  startedAt = stored.startedAt ?? Date.now();
-
-  // Restart offscreen capture so stream and state reporting resume
-  try {
-    await startCapture(stored.capturedTabId, stored.livekitUrl, stored.livekitToken, stored.quality ?? DEFAULT_QUALITY, stored.fps ?? DEFAULT_FPS);
-  } catch (err) {
-    error("[cinema] Failed to restart capture after SW restart:", err);
-    await chrome.storage.session.remove(SESSION_KEYS as unknown as string[]);
-    currentRoom = null;
-    capturedTabId = null;
-  }
+  // getDisplayMedia needs a fresh user gesture — there's no headless way to
+  // resume the capture window's stream after a SW restart. End the session.
+  warn("[cinema] Can't silently resume capture after SW restart (getDisplayMedia needs a user gesture) — ending session");
+  await chrome.storage.session.remove(SESSION_KEYS as unknown as string[]);
+  currentRoom = null;
+  capturedTabId = null;
 }
 
 // ── Messages from popup & content script ─────────────────────────────────────
@@ -134,7 +126,7 @@ chrome.runtime.onMessage.addListener((msg: InboundMessage, _sender, sendResponse
     return true;
   }
 
-  if (msg.type === "STOP_SHARING") {
+  if (msg.type === "STOP_SHARING" || msg.type === "CAPTURE_ENDED") {
     stopSharing();
     sendResponse({ ok: true });
     return false;
@@ -197,8 +189,8 @@ async function handleCreateRoom(
   return new Promise((resolve, reject) => {
     getSocket().emit("room:create", { hostName }, async (res) => {
       try {
-        await startCapture(tabId, res.livekitUrl, res.livekitToken, quality, fps);
         await persistSession(res.code, tabId, res.livekitUrl, res.livekitToken, quality, fps, res.hostKey);
+        await openCaptureWindow();
         resolve({ ok: true, code: res.code });
       } catch (err) {
         reject(err);
@@ -220,8 +212,8 @@ async function handleJoinRoom(
     getSocket().emit("room:join", { code, viewerName: hostName }, async (res) => {
       try {
         if (!res.ok) { resolve({ ok: false, error: res.error }); return; }
-        await startCapture(tabId, res.livekitUrl!, res.livekitToken!, quality, fps);
         await persistSession(code, tabId, res.livekitUrl!, res.livekitToken!, quality, fps);
+        await openCaptureWindow();
         resolve({ ok: true });
       } catch (err) {
         reject(err);
@@ -241,73 +233,47 @@ function ensureSocketConnected(): Promise<void> {
   });
 }
 
-// ── Tab capture + offscreen ───────────────────────────────────────────────────
+// ── Capture window ────────────────────────────────────────────────────────────
 
-async function startCapture(tabId: number, livekitUrl: string, livekitToken: string, quality: QualityKey, fps: FpsOption) {
+const CAPTURE_WINDOW_WIDTH = 320;
+const CAPTURE_WINDOW_HEIGHT = 220;
+
+async function openCaptureWindow() {
   // Re-inject content script to ensure fresh context (extension reload invalidates old one)
-  await chrome.scripting.executeScript({
-    target: { tabId },
-    files: ["content.js"],
-  }).catch((err) => warn("[cinema bg] content script re-inject:", err));
-
-  // Close existing offscreen doc before creating a new one (handles SW restart)
-  if (offscreenCreated) {
-    await chrome.offscreen.closeDocument().catch(() => {});
-    offscreenCreated = false;
+  if (capturedTabId !== null) {
+    await chrome.scripting.executeScript({
+      target: { tabId: capturedTabId },
+      files: ["content.js"],
+    }).catch((err) => warn("[cinema bg] content script re-inject:", err));
   }
 
-  // Register listener BEFORE createDocument so we don't miss OFFSCREEN_READY
-  // if the document loads before we start listening.
-  type MsgHandler = Parameters<typeof chrome.runtime.onMessage.addListener>[0];
-  let readyHandler!: MsgHandler;
-  const readyPromise = new Promise<void>((resolve) => {
-    readyHandler = (msg: { type?: string }) => {
-      if (msg?.type === "OFFSCREEN_READY") {
-        chrome.runtime.onMessage.removeListener(readyHandler);
-        resolve();
-      }
-    };
-    chrome.runtime.onMessage.addListener(readyHandler);
+  // Close an existing capture window before opening a new one (handles SW restart)
+  if (captureWindowId !== null) {
+    await chrome.windows.remove(captureWindowId).catch(() => {});
+    captureWindowId = null;
+  }
+
+  const win = await chrome.windows.create({
+    url: chrome.runtime.getURL("capture.html"),
+    type: "popup",
+    width: CAPTURE_WINDOW_WIDTH,
+    height: CAPTURE_WINDOW_HEIGHT,
+    focused: true,
   });
-
-  await chrome.offscreen.createDocument({
-    url: chrome.runtime.getURL("offscreen.html"),
-    reasons: [chrome.offscreen.Reason.USER_MEDIA],
-    justification: "Capturar pestaña y publicar a LiveKit",
-  });
-  offscreenCreated = true;
-
-  // Wait for offscreen to signal readiness (2 s fallback in case signal was missed)
-  await Promise.race([
-    readyPromise,
-    new Promise<void>((r) => setTimeout(() => {
-      chrome.runtime.onMessage.removeListener(readyHandler);
-      warn("[cinema bg] OFFSCREEN_READY timeout — proceeding anyway");
-      r();
-    }, 2000)),
-  ]);
-
-  const streamId = await getTabCaptureStreamId(tabId);
-  chrome.runtime.sendMessage({ type: "START_PUBLISH", streamId, livekitUrl, livekitToken, quality, fps });
+  captureWindowId = win.id ?? null;
 }
 
-async function getTabCaptureStreamId(tabId: number): Promise<string> {
-  return new Promise((resolve, reject) => {
-    chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (id) => {
-      if (chrome.runtime.lastError || !id) {
-        reject(new Error(chrome.runtime.lastError?.message ?? "tabCapture falló"));
-      } else {
-        resolve(id);
-      }
-    });
-  });
-}
+chrome.windows.onRemoved.addListener((windowId) => {
+  if (windowId === captureWindowId) {
+    captureWindowId = null;
+    stopSharing();
+  }
+});
 
 function stopSharing() {
-  if (offscreenCreated) {
-    chrome.runtime.sendMessage({ type: "STOP_PUBLISH" });
-    chrome.offscreen.closeDocument().catch(() => {});
-    offscreenCreated = false;
+  if (captureWindowId !== null) {
+    chrome.windows.remove(captureWindowId).catch(() => {});
+    captureWindowId = null;
   }
   currentRoom = null;
   capturedTabId = null;

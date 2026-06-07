@@ -24,8 +24,6 @@
     }
   ],
   "permissions": [
-    "tabCapture",
-    "offscreen",
     "activeTab",
     "scripting",
     "storage",
