@@ -3,7 +3,7 @@
  */
 
 import { io, type Socket } from "socket.io-client";
-import type { ClientToServerEvents, ServerToClientEvents, ControlAction, PlaybackState } from "@cinema/shared";
+import type { ClientToServerEvents, ServerToClientEvents, ControlAction, PeerInfo, PlaybackState } from "@cinema/shared";
 import { log, warn, error } from "./logger";
 import { DEFAULT_QUALITY, DEFAULT_FPS, type QualityKey, type FpsOption } from "./quality";
 
@@ -20,6 +20,8 @@ type InboundMessage =
   | { type: "CAPTURE_ENDED" }
   | { type: "STATE_REPORT"; state: PlaybackState }
   | { type: "GET_STATUS" }
+  | { type: "GET_PEERS" }
+  | { type: "GET_TAB_AUDIO_STREAM_ID" }
   | { type: "FORWARD_TO_CONTENT"; inner: unknown };
 
 let socket: AppSocket | null = null;
@@ -28,6 +30,21 @@ let capturedTabId: number | null = null;
 let hostKey: string | null = null;
 let captureWindowId: number | null = null;
 let startedAt: number | null = null;
+
+// Participant list — kept here (not in the capture window) because the
+// capture window doesn't hold the room's socket. Forwarded to the capture
+// window so it can render the same "Participantes" panel the web viewers see,
+// with speaking/mute indicators driven by its own LiveKit Room connection.
+let peers: PeerInfo[] = [];
+
+function setPeers(list: PeerInfo[]) {
+  peers = list;
+  forwardPeers();
+}
+
+function forwardPeers() {
+  chrome.runtime.sendMessage({ type: "PEERS_SNAPSHOT", peers }).catch(() => {});
+}
 
 // Keys persisted in chrome.storage.session so SW restart can restore state
 const SESSION_KEYS = ["currentRoom", "capturedTabId", "livekitUrl", "livekitToken", "hostKey", "quality", "fps", "startedAt"] as const;
@@ -41,6 +58,10 @@ function getSocket(): AppSocket {
     socket.on("connect_error", (err) => {
       error("[cinema] socket connect_error:", err.message);
     });
+
+    socket.on("room:peers", (list) => setPeers(list));
+    socket.on("peer:join", (peer) => setPeers([...peers, peer]));
+    socket.on("peer:leave", (peer) => setPeers(peers.filter((p) => p.id !== peer.id)));
 
     socket.on("control:action", (action: ControlAction) => {
       log("[cinema bg] control:action received:", action.type, "capturedTabId:", capturedTabId);
@@ -143,6 +164,33 @@ chrome.runtime.onMessage.addListener((msg: InboundMessage, _sender, sendResponse
     return false;
   }
 
+  if (msg.type === "GET_PEERS") {
+    // Capture window pulls the current snapshot on mount — setPeers() may have
+    // run (and broadcast) before the window's listener was ready to catch it.
+    sendResponse({ peers });
+    return false;
+  }
+
+  if (msg.type === "GET_TAB_AUDIO_STREAM_ID") {
+    // Must run here: only the service worker holds the "tabCapture" permission.
+    // The capture window uses the returned id with getUserMedia({ chromeMediaSource: "tab" })
+    // to grab the movie tab's audio directly — never the OS/system loopback — so
+    // voice-chat audio playing on the host's speakers can never be re-captured and
+    // leaked back to viewers.
+    if (capturedTabId === null) {
+      sendResponse({ ok: false, error: "No hay pestaña capturada" });
+      return false;
+    }
+    chrome.tabCapture.getMediaStreamId({ targetTabId: capturedTabId }, (streamId) => {
+      if (chrome.runtime.lastError || !streamId) {
+        sendResponse({ ok: false, error: chrome.runtime.lastError?.message ?? "No se pudo capturar el audio de la pestaña" });
+      } else {
+        sendResponse({ ok: true, streamId });
+      }
+    });
+    return true;
+  }
+
   if (msg.type === "FORWARD_TO_CONTENT") {
     if (capturedTabId !== null) {
       chrome.tabs.sendMessage(capturedTabId, msg.inner).catch(() => {});
@@ -190,6 +238,9 @@ async function handleCreateRoom(
     getSocket().emit("room:create", { hostName }, async (res) => {
       try {
         await persistSession(res.code, tabId, res.livekitUrl, res.livekitToken, quality, fps, res.hostKey);
+        // Server doesn't send an initial room:peers snapshot to the creator —
+        // seed with ourselves; peer:join/peer:leave keep it in sync from here.
+        setPeers([{ id: getSocket().id ?? "", name: hostName, role: "host" }]);
         await openCaptureWindow();
         resolve({ ok: true, code: res.code });
       } catch (err) {
@@ -235,8 +286,10 @@ function ensureSocketConnected(): Promise<void> {
 
 // ── Capture window ────────────────────────────────────────────────────────────
 
-const CAPTURE_WINDOW_WIDTH = 320;
-const CAPTURE_WINDOW_HEIGHT = 220;
+// Wider/taller now that the window doubles as a host voice/participants console
+// (screen preview + participant list + mic/speaker controls), not just a status pill.
+const CAPTURE_WINDOW_WIDTH = 480;
+const CAPTURE_WINDOW_HEIGHT = 680;
 
 async function openCaptureWindow() {
   // Re-inject content script to ensure fresh context (extension reload invalidates old one)
@@ -279,6 +332,7 @@ function stopSharing() {
   capturedTabId = null;
   hostKey = null;
   startedAt = null;
+  peers = [];
   chrome.storage.session.remove(SESSION_KEYS as unknown as string[]);
   socket?.disconnect();
   socket = null;

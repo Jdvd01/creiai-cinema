@@ -5,7 +5,8 @@
     <style>
       * { box-sizing: border-box; margin: 0; padding: 0; }
       body {
-        width: 280px;
+        width: 480px;
+        min-height: 680px;
         padding: 16px;
         font-family: system-ui, sans-serif;
         background: #0a0a0a;
@@ -13,6 +14,7 @@
       }
       h1 { font-size: 16px; margin-bottom: 12px; }
       p { font-size: 12px; color: #999; margin-bottom: 10px; }
+      .hint { font-size: 11px; color: #f0b429; background: rgba(240,180,41,0.08); border: 1px solid rgba(240,180,41,0.25); border-radius: 6px; padding: 8px 10px; }
       button.primary {
         width: 100%; padding: 9px; border: none; border-radius: 6px;
         background: #2563eb; color: #fff; font-size: 13px; font-weight: 600;
@@ -21,26 +23,95 @@
       button.primary:hover { background: #3b82f6; }
       button.primary:disabled { background: #1e3a8a; cursor: default; opacity: 0.6; }
       button.danger {
-        width: 100%; padding: 9px; border: none; border-radius: 6px;
-        background: #dc2626; color: #fff; font-size: 13px; font-weight: 600;
-        cursor: pointer; margin-top: 8px;
+        padding: 7px 14px; border: none; border-radius: 6px;
+        background: #dc2626; color: #fff; font-size: 12px; font-weight: 600;
+        cursor: pointer;
       }
+      button.danger:hover { background: #ef4444; }
       #status { font-size: 12px; color: #4ade80; margin-top: 10px; min-height: 16px; }
       #error { font-size: 12px; color: #f87171; margin-top: 4px; min-height: 16px; }
       #picker-view.hidden, #live-view.hidden { display: none; }
+
+      .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+      .field span { font-size: 11px; color: #aaa; text-transform: uppercase; letter-spacing: 0.04em; }
+      select {
+        width: 100%; padding: 7px 8px; border-radius: 6px; border: 1px solid #333;
+        background: #171717; color: #fff; font-size: 12px;
+      }
+
+      .row { display: flex; align-items: center; gap: 8px; }
+      .between { justify-content: space-between; }
+      .live-pill { color: #4ade80; font-size: 12px; margin: 0; }
+
+      #preview {
+        width: 100%; aspect-ratio: 16/9; margin: 10px 0; border-radius: 8px;
+        background: #000; object-fit: contain; border: 1px solid #262626;
+      }
+
+      .voice-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+      #btn-mic {
+        flex-shrink: 0; padding: 9px 14px; border-radius: 999px; border: 1px solid #333;
+        background: #1f1f1f; color: #ddd; font-size: 13px; font-weight: 600; cursor: pointer;
+        transition: background 0.15s, color 0.15s, border-color 0.15s;
+      }
+      #btn-mic[aria-pressed="true"] { background: #16a34a; color: #fff; border-color: #16a34a; }
+      .voice-bar select { flex: 1; min-width: 0; }
+
+      .section-title { font-size: 11px; color: #aaa; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; }
+      #peer-list { list-style: none; max-height: 220px; overflow-y: auto; }
+      #peer-list li {
+        display: flex; align-items: center; gap: 10px; padding: 7px 4px;
+        border-bottom: 1px solid #1a1a1a; font-size: 13px;
+      }
+      #peer-list li:last-child { border-bottom: none; }
+      .avatar {
+        flex-shrink: 0; width: 30px; height: 30px; border-radius: 999px;
+        display: flex; align-items: center; justify-content: center;
+        font-weight: 700; font-size: 13px; color: #fff;
+        background: linear-gradient(135deg, #3b82f6, #7c3aed);
+        box-shadow: 0 0 0 2px transparent; transition: box-shadow 0.15s;
+      }
+      .avatar.speaking { box-shadow: 0 0 0 2px #4ade80; }
+      .peer-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .peer-role { font-size: 10px; color: #777; text-transform: uppercase; letter-spacing: 0.03em; }
+      .mic-icon { flex-shrink: 0; font-size: 13px; opacity: 0.6; }
+      .mic-icon.live { opacity: 1; }
     </style>
   </head>
   <body>
     <h1>🎬 Creiai Cinema</h1>
 
+    <div class="field">
+      <span>Micrófono</span>
+      <select id="mic-select"></select>
+    </div>
+    <div class="field">
+      <span>Salida de voz (auriculares recomendado)</span>
+      <select id="speaker-select"></select>
+    </div>
+
     <div id="picker-view">
-      <p>Elige qué pantalla compartir. Tilda "compartir audio del sistema" para incluir el sonido.</p>
+      <p>Elige qué pantalla compartir. Tilda "compartir audio del sistema" para incluir el sonido de la película — el chat de voz va por separado y nunca se filtra a los viewers.</p>
+      <p class="hint">💡 Usa auriculares para escuchar la voz: así tu micrófono no recapturará las voces de los demás cuando compartas audio del sistema.</p>
       <button class="primary" id="btn-share">Compartir pantalla</button>
     </div>
 
     <div id="live-view" class="hidden">
-      <p style="color:#4ade80;">⏱ <span id="live-duration">0:00</span> en vivo</p>
-      <button class="danger" id="btn-stop">Detener</button>
+      <div class="row between">
+        <p class="live-pill">⏱ <span id="live-duration">0:00</span> en vivo</p>
+        <button class="danger" id="btn-stop">Detener</button>
+      </div>
+
+      <video id="preview" autoplay muted playsinline></video>
+
+      <div class="voice-bar">
+        <button id="btn-mic" type="button" aria-pressed="false">🎤 Hablar</button>
+      </div>
+
+      <div class="participants">
+        <p class="section-title">Participantes (<span id="peer-count">1</span>)</p>
+        <ul id="peer-list"></ul>
+      </div>
     </div>
 
     <div id="status"></div>

@@ -6,8 +6,10 @@ import {
   Room,
   RoomEvent,
   RemoteTrack,
+  RemoteParticipant,
   Track,
   ConnectionState,
+  type Participant,
 } from "livekit-client";
 import { getSocket } from "@/lib/socket";
 import type { ControlAction, PeerInfo, PlaybackState, RoomJoinResponse } from "@cinema/shared";
@@ -103,6 +105,22 @@ function IconPeople() {
   );
 }
 
+function IconMic() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5">
+      <path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z" />
+    </svg>
+  );
+}
+
+function IconMicOff() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5">
+      <path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52a5 5 0 0 1-5-5H5a7 7 0 0 0 6 6.92V21h2v-3.08c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z" />
+    </svg>
+  );
+}
+
 function IconCheck() {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4">
@@ -181,6 +199,19 @@ export function RoomView({ code }: Props) {
   const [streamStartedAt, setStreamStartedAt] = useState<number | null>(null);
   const [liveSeconds, setLiveSeconds] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // ── Voice chat ────────────────────────────────────────────────────────────
+  // Everyone (host + viewers) can talk; everyone starts muted (toggle to talk).
+  // Voice plays through its own <audio> elements — separate from the
+  // transmission audio (audioRef/volume/muted above) so muting one never
+  // affects the other. Devices are chosen up-front in JoinPrompt.
+  const voiceAudioEls = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const [voiceTalking, setVoiceTalking] = useState(false);
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  const [speakingIds, setSpeakingIds] = useState<Set<string>>(new Set());
+  const [micEnabledIds, setMicEnabledIds] = useState<Set<string>>(new Set());
+  const [selectedMic, setSelectedMic] = useState("");
+  const [selectedSpeaker, setSelectedSpeaker] = useState("");
+
   const [showPeers, setShowPeers] = useState(false);
   const [showSpeed, setShowSpeed] = useState(false);
   const [showControls, setShowControls] = useState(true);
@@ -227,6 +258,8 @@ export function RoomView({ code }: Props) {
       const storedCreatedAt = sessionStorage.getItem(`created_${code}`);
       if (storedCreatedAt) setStreamStartedAt(Number(storedCreatedAt));
     }
+    setSelectedMic(sessionStorage.getItem("voice_mic") ?? "");
+    setSelectedSpeaker(sessionStorage.getItem("voice_speaker") ?? "");
   }, [code]);
 
   // ── "Time live" counter ───────────────────────────────────────────────────
@@ -243,38 +276,132 @@ export function RoomView({ code }: Props) {
     if (!lkToken || !lkUrl) return;
     const room = new Room({ adaptiveStream: false, dynacast: false });
     livekitRoom.current = room;
+    // Stable across the effect's lifetime (the ref is created once via
+    // useRef(new Map()) and never reassigned) — captured locally so cleanup
+    // doesn't read a ref whose `.current` could theoretically have moved on.
+    const voiceEls = voiceAudioEls.current;
     const onStateChange = (state: ConnectionState) => setConnectionState(state);
-    const onTrackSubscribed = (track: RemoteTrack) => {
+
+    // Voice (Microphone) tracks get their own <audio> elements — kept fully
+    // separate from the transmission audio (audioRef) so the transmission
+    // mute/volume never silences voice chat and vice versa.
+    const attachVoice = (track: RemoteTrack, participant: RemoteParticipant) => {
+      const el = track.attach() as HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> };
+      el.muted = false;
+      if (selectedSpeaker) el.setSinkId?.(selectedSpeaker).catch(() => {});
+      voiceEls.set(participant.identity, el);
+      document.body.appendChild(el);
+    };
+    const detachVoice = (track: RemoteTrack, participant: RemoteParticipant) => {
+      track.detach().forEach((el) => el.remove());
+      voiceEls.delete(participant.identity);
+    };
+
+    const refreshMicEnabled = () => {
+      const ids = new Set<string>();
+      if (room.localParticipant.isMicrophoneEnabled) ids.add(room.localParticipant.identity);
+      for (const p of room.remoteParticipants.values()) {
+        if (p.isMicrophoneEnabled) ids.add(p.identity);
+      }
+      setMicEnabledIds(ids);
+    };
+
+    const onTrackSubscribed = (track: RemoteTrack, _pub: unknown, participant: RemoteParticipant) => {
       if (track.kind === Track.Kind.Video && videoRef.current) track.attach(videoRef.current);
-      if (track.kind === Track.Kind.Audio) {
+      if (track.kind === Track.Kind.Audio && track.source === Track.Source.Microphone) {
+        attachVoice(track, participant);
+      } else if (track.kind === Track.Kind.Audio) {
         const el = track.attach() as HTMLAudioElement;
         el.volume = volume;
         audioRef.current = el;
         document.body.appendChild(el);
       }
+      refreshMicEnabled();
     };
-    const onTrackUnsubscribed = (track: RemoteTrack) => {
-      track.detach();
-      if (track.kind === Track.Kind.Audio && audioRef.current) {
-        audioRef.current.remove();
-        audioRef.current = null;
+    const onTrackUnsubscribed = (track: RemoteTrack, _pub: unknown, participant: RemoteParticipant) => {
+      if (track.kind === Track.Kind.Audio && track.source === Track.Source.Microphone) {
+        detachVoice(track, participant);
+      } else {
+        track.detach();
+        if (track.kind === Track.Kind.Audio && audioRef.current) {
+          audioRef.current.remove();
+          audioRef.current = null;
+        }
       }
+      refreshMicEnabled();
     };
+    const onActiveSpeakersChanged = (active: Participant[]) => {
+      setSpeakingIds(new Set(active.map((p) => p.identity)));
+    };
+
     room.on(RoomEvent.ConnectionStateChanged, onStateChange);
     room.on(RoomEvent.TrackSubscribed, onTrackSubscribed);
     room.on(RoomEvent.TrackUnsubscribed, onTrackUnsubscribed);
-    room.connect(lkUrl, lkToken).catch((err: Error) => {
-      console.error("[cinema] LiveKit connection failed:", err);
-      setLivekitError(err.message ?? String(err));
-    });
+    room.on(RoomEvent.ActiveSpeakersChanged, onActiveSpeakersChanged);
+    room.on(RoomEvent.TrackMuted, refreshMicEnabled);
+    room.on(RoomEvent.TrackUnmuted, refreshMicEnabled);
+    room.on(RoomEvent.ParticipantConnected, refreshMicEnabled);
+    room.on(RoomEvent.ParticipantDisconnected, refreshMicEnabled);
+    room.on(RoomEvent.LocalTrackPublished, refreshMicEnabled);
+    room.on(RoomEvent.LocalTrackUnpublished, refreshMicEnabled);
+
+    room.connect(lkUrl, lkToken)
+      .then(() => {
+        // Start muted — voice is opt-in (toggle to talk).
+        return room.localParticipant.setMicrophoneEnabled(false);
+      })
+      .then(() => refreshMicEnabled())
+      .catch((err: Error) => {
+        console.error("[cinema] LiveKit connection failed:", err);
+        setLivekitError(err.message ?? String(err));
+      });
     return () => {
       room.off(RoomEvent.ConnectionStateChanged, onStateChange);
       room.off(RoomEvent.TrackSubscribed, onTrackSubscribed);
       room.off(RoomEvent.TrackUnsubscribed, onTrackUnsubscribed);
+      room.off(RoomEvent.ActiveSpeakersChanged, onActiveSpeakersChanged);
+      room.off(RoomEvent.TrackMuted, refreshMicEnabled);
+      room.off(RoomEvent.TrackUnmuted, refreshMicEnabled);
+      room.off(RoomEvent.ParticipantConnected, refreshMicEnabled);
+      room.off(RoomEvent.ParticipantDisconnected, refreshMicEnabled);
+      room.off(RoomEvent.LocalTrackPublished, refreshMicEnabled);
+      room.off(RoomEvent.LocalTrackUnpublished, refreshMicEnabled);
+      voiceEls.forEach((el) => el.remove());
+      voiceEls.clear();
       room.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lkToken, lkUrl]);
+
+  // ── Voice output device sync ──────────────────────────────────────────────
+  useEffect(() => {
+    if (!selectedSpeaker) return;
+    for (const el of voiceAudioEls.current.values()) {
+      (el as HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> })
+        .setSinkId?.(selectedSpeaker)
+        .catch(() => {});
+    }
+  }, [selectedSpeaker]);
+
+  // ── Voice talk toggle ─────────────────────────────────────────────────────
+  const toggleVoice = useCallback(() => {
+    const room = livekitRoom.current;
+    if (!room || voiceBusy) return;
+    const next = !voiceTalking;
+    setVoiceBusy(true);
+    room.localParticipant
+      .setMicrophoneEnabled(next, {
+        deviceId: selectedMic || undefined,
+        echoCancellation: true,
+        noiseSuppression: true,
+      })
+      .then(() => setVoiceTalking(next))
+      .catch((err: Error) => {
+        console.error("[cinema] mic toggle failed:", err);
+        setLivekitError(err.message ?? "No se pudo acceder al micrófono");
+      })
+      .finally(() => setVoiceBusy(false));
+  }, [voiceTalking, voiceBusy, selectedMic]);
 
   // ── Volume sync ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -529,22 +656,36 @@ export function RoomView({ code }: Props) {
                     </span>
                   </div>
                   <ul className="max-h-64 overflow-y-auto py-1">
-                    {peers.map((p) => (
-                      <li key={p.id} className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-white/5">
-                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-violet-600 text-sm font-bold">
-                          {p.name[0]?.toUpperCase()}
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium">{p.name}</p>
-                          <p className="text-xs capitalize text-neutral-400">{p.role}</p>
-                        </div>
-                        {p.role === "host" && (
-                          <span className="shrink-0 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-400">
-                            host
+                    {peers.map((p) => {
+                      const speaking = speakingIds.has(p.id);
+                      const micOn = micEnabledIds.has(p.id);
+                      return (
+                        <li key={p.id} className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-white/5">
+                          <span
+                            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-violet-600 text-sm font-bold transition-shadow ${
+                              speaking ? "ring-2 ring-green-400" : ""
+                            }`}
+                          >
+                            {p.name[0]?.toUpperCase()}
                           </span>
-                        )}
-                      </li>
-                    ))}
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-medium">{p.name}</p>
+                            <p className="text-xs capitalize text-neutral-400">{p.role}</p>
+                          </div>
+                          <span
+                            className={micOn ? "text-green-400" : "text-neutral-600"}
+                            title={micOn ? "Hablando habilitado" : "Silenciado"}
+                          >
+                            {micOn ? <IconMic /> : <IconMicOff />}
+                          </span>
+                          {p.role === "host" && (
+                            <span className="shrink-0 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-400">
+                              host
+                            </span>
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
               )}
@@ -632,6 +773,18 @@ export function RoomView({ code }: Props) {
 
           {/* Spacer */}
           <div className="flex-1" />
+
+          {/* Voice chat mic toggle — talk with host + everyone in the room */}
+          <button
+            onClick={toggleVoice}
+            disabled={voiceBusy}
+            className={`flex h-9 w-9 items-center justify-center rounded-full transition-colors disabled:opacity-50 ${
+              voiceTalking ? "bg-green-600 text-white hover:bg-green-500" : "text-white/80 hover:bg-white/10 hover:text-white"
+            }`}
+            title={voiceTalking ? "Silenciar micrófono" : "Hablar con la sala"}
+          >
+            {voiceTalking ? <IconMic /> : <IconMicOff />}
+          </button>
 
           {/* Speed dropdown */}
           <div className="relative" ref={speedRef}>
@@ -751,10 +904,40 @@ interface JoinPromptProps {
   onJoined: (token: string, url: string, role: "host" | "viewer", state?: PlaybackState) => void;
 }
 
+type MicPermission = "idle" | "checking" | "granted" | "denied";
+
 function JoinPrompt({ code, onJoined }: JoinPromptProps) {
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // ── Voice device gate ─────────────────────────────────────────────────────
+  // Ask mic permission and let the user pick mic + speaker BEFORE joining —
+  // unlocks device labels, surfaces the permission prompt up front, and lets
+  // them route voice to headphones (anti-echo) from the start.
+  const [micPermission, setMicPermission] = useState<MicPermission>("idle");
+  const [micDevices, setMicDevices] = useState<MediaDeviceInfo[]>([]);
+  const [speakerDevices, setSpeakerDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedMic, setSelectedMic] = useState("");
+  const [selectedSpeaker, setSelectedSpeaker] = useState("");
+
+  async function requestMicAccess() {
+    setMicPermission("checking");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((t) => t.stop());
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const mics = devices.filter((d) => d.kind === "audioinput");
+      const speakers = devices.filter((d) => d.kind === "audiooutput");
+      setMicDevices(mics);
+      setSpeakerDevices(speakers);
+      setSelectedMic(mics[0]?.deviceId ?? "");
+      setSelectedSpeaker(speakers[0]?.deviceId ?? "");
+      setMicPermission("granted");
+    } catch {
+      setMicPermission("denied");
+    }
+  }
 
   function handleJoin(e: React.FormEvent) {
     e.preventDefault();
@@ -772,6 +955,8 @@ function JoinPrompt({ code, onJoined }: JoinPromptProps) {
         sessionStorage.setItem("lk_url", res.livekitUrl!);
         sessionStorage.setItem("my_name", name.trim());
         sessionStorage.setItem("my_role", "viewer");
+        sessionStorage.setItem("voice_mic", selectedMic);
+        sessionStorage.setItem("voice_speaker", selectedSpeaker);
         if (res.state) sessionStorage.setItem(`state_${code}`, JSON.stringify(res.state));
         if (res.createdAt) sessionStorage.setItem(`created_${code}`, String(res.createdAt));
         onJoined(res.livekitToken!, res.livekitUrl!, "viewer", res.state);
@@ -800,6 +985,61 @@ function JoinPrompt({ code, onJoined }: JoinPromptProps) {
           autoFocus
           className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-white placeholder-neutral-500 outline-none transition-colors focus:border-white/30 focus:bg-white/10"
         />
+
+        {/* ── Chat de voz: permiso + selección de dispositivos ────────────── */}
+        <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+          <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
+            <IconMic /> Chat de voz
+          </p>
+
+          {micPermission === "idle" && (
+            <button
+              type="button"
+              onClick={requestMicAccess}
+              className="w-full rounded-lg border border-white/15 bg-white/5 py-2 text-sm font-medium text-white transition-colors hover:bg-white/10"
+            >
+              Permitir micrófono y elegir dispositivos
+            </button>
+          )}
+          {micPermission === "checking" && (
+            <p className="text-sm text-neutral-400">Pidiendo permiso de micrófono…</p>
+          )}
+          {micPermission === "denied" && (
+            <p className="text-sm text-amber-400">
+              Sin acceso al micrófono — podrás escuchar pero no hablar. Puedes habilitarlo luego desde los permisos del navegador.
+            </p>
+          )}
+          {micPermission === "granted" && (
+            <div className="flex flex-col gap-2">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-neutral-400">Micrófono</span>
+                <select
+                  value={selectedMic}
+                  onChange={(e) => setSelectedMic(e.target.value)}
+                  className="rounded-lg border border-white/10 bg-neutral-800 px-2 py-1.5 text-sm text-white outline-none"
+                >
+                  {micDevices.map((d) => (
+                    <option key={d.deviceId} value={d.deviceId}>{d.label || "Micrófono"}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-neutral-400">Altavoz / auriculares</span>
+                <select
+                  value={selectedSpeaker}
+                  onChange={(e) => setSelectedSpeaker(e.target.value)}
+                  className="rounded-lg border border-white/10 bg-neutral-800 px-2 py-1.5 text-sm text-white outline-none"
+                >
+                  {speakerDevices.map((d) => (
+                    <option key={d.deviceId} value={d.deviceId}>{d.label || "Altavoz"}</option>
+                  ))}
+                </select>
+              </label>
+              <p className="text-xs text-neutral-500">Empiezas silenciado — puedes activar el micrófono dentro de la sala.</p>
+            </div>
+          )}
+        </div>
+
         {error && <p className="text-sm text-red-400">{error}</p>}
         <button
           type="submit"

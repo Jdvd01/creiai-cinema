@@ -1,4 +1,4 @@
-import { AccessToken } from "livekit-server-sdk";
+import { AccessToken, TrackSource } from "livekit-server-sdk";
 
 const LIVEKIT_URL = process.env.LIVEKIT_URL ?? "ws://localhost:7880";
 
@@ -20,22 +20,31 @@ export { LIVEKIT_URL };
 
 /**
  * Issue a LiveKit JWT for a participant in a room.
- * host = can publish; viewer = subscribe only.
+ * - host: can publish anything (screen, screen audio, mic) + data.
+ * - viewer: can only publish their microphone (voice chat) — never video/screen —
+ *   and can always subscribe to everything (stream + everyone's voice).
+ *
+ * `identity` is the LiveKit participant identity — pass the socket.id so it stays
+ * stable and matches `PeerInfo.id` for UI purposes (speaking indicators, etc).
+ * `displayName` is the human-readable name shown in the UI.
  */
 export async function createToken(
   roomName: string,
-  participantName: string,
+  identity: string,
+  displayName: string,
   role: "host" | "viewer"
 ): Promise<string> {
   const at = new AccessToken(API_KEY, API_SECRET, {
-    identity: participantName,
+    identity,
+    name: displayName,
     ttl: "4h",
   });
 
   at.addGrant({
     roomJoin: true,
     room: roomName,
-    canPublish: role === "host",
+    canPublish: true,
+    canPublishSources: role === "host" ? undefined : [TrackSource.MICROPHONE],
     canPublishData: role === "host",
     canSubscribe: true,
   });

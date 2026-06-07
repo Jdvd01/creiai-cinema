@@ -62,7 +62,7 @@ io.on("connection", (socket) => {
     const room = createRoom(code, socket.id, hostName, hostKey);
     socket.join(code);
 
-    const token = await createToken(code, hostName, "host");
+    const token = await createToken(code, socket.id, hostName, "host");
     cb({ code, livekitUrl: LIVEKIT_URL, livekitToken: token, hostKey, createdAt: room.createdAt });
 
     log(`[room] created ${code} by ${hostName}`);
@@ -87,7 +87,7 @@ io.on("connection", (socket) => {
     addPeer(payload.code, socket.id, peer);
     socket.join(payload.code);
 
-    const token = await createToken(payload.code, viewerName, "viewer");
+    const token = await createToken(payload.code, socket.id, viewerName, "viewer");
 
     socket.to(payload.code).emit("peer:join", peer);
     socket.emit("room:peers", [...room.peers.values()]);
