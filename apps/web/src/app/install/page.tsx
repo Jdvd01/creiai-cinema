@@ -4,7 +4,8 @@ const steps = [
   {
     n: 1,
     title: "Descargar el archivo",
-    body: 'Haz clic en el botón "Descargar extensión" en la página principal. Se descarga un archivo llamado cinema-extension.zip.',
+    body: "Descarga el archivo cinema-extension.zip haciendo clic en el botón:",
+    download: "https://github.com/Jdvd01/creiai-cinema/releases/download/v1.0.1/cinema-extension.zip",
   },
   {
     n: 2,
@@ -61,6 +62,15 @@ export default function InstallPage() {
             <div className="flex-1">
               <h2 className="font-semibold text-white">{s.title}</h2>
               <p className="mt-1 text-sm text-neutral-400">{s.body}</p>
+              {s.download && (
+                <a
+                  href={s.download}
+                  download
+                  className="mt-3 inline-block rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500"
+                >
+                  Descargar extensión
+                </a>
+              )}
               {s.code && (
                 <code className="mt-2 block rounded bg-neutral-800 px-3 py-2 font-mono text-sm text-blue-300">
                   {s.code}
