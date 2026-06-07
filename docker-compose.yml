@@ -10,3 +10,5 @@ services:
       - "7882:7882/udp"
     environment:
       - "LIVEKIT_KEYS=devkey: devsecret00000000000000000000000"
+    mem_limit: 512m
+    cpus: "1.0"
