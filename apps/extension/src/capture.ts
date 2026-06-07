@@ -115,12 +115,14 @@ function populateSelect(select: HTMLSelectElement, devices: MediaDeviceInfo[], f
 
 micSelect.addEventListener("change", () => {
   localStorage.setItem(MIC_STORAGE_KEY, micSelect.value);
-  // If we're already talking, swap the live capture to the new device.
-  if (micEnabled && livekitRoom) {
-    livekitRoom.localParticipant
-      .setMicrophoneEnabled(true, { deviceId: micSelect.value || undefined })
-      .catch((err) => warn("[cinema capture] mic device switch failed:", err));
-  }
+  if (!micSelect.value || !livekitRoom) return;
+  // `setMicrophoneEnabled(true, { deviceId })` is a no-op once a mic track is
+  // already published — it only applies constraints when creating the track.
+  // `switchActiveDevice` both swaps the live track's device AND updates
+  // `audioCaptureDefaults`, so the choice sticks for the next time mic is enabled.
+  livekitRoom
+    .switchActiveDevice("audioinput", micSelect.value)
+    .catch((err) => warn("[cinema capture] mic device switch failed:", err));
 });
 
 speakerSelect.addEventListener("change", () => {
