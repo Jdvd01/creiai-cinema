@@ -10,6 +10,10 @@ COPY apps/web/package.json ./apps/web/
 COPY apps/extension/package.json ./apps/extension/
 RUN pnpm install --frozen-lockfile
 
+# Build-time env vars (must be ARG so Railway passes them at docker build)
+ARG NEXT_PUBLIC_SERVER_URL
+ENV NEXT_PUBLIC_SERVER_URL=$NEXT_PUBLIC_SERVER_URL
+
 # Build
 COPY packages/shared ./packages/shared
 COPY apps/web ./apps/web
