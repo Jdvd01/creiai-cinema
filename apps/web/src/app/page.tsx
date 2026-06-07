@@ -25,7 +25,7 @@ export default function Home() {
 				</p>
 				<div className="mt-3 flex gap-3">
 					<a
-						href="https://github.com/Jdvd01/creiai-cinema/releases/download/v1.0.2/cinema-extension.zip"
+						href="https://github.com/Jdvd01/creiai-cinema/releases/download/v1.0.3/cinema-extension.zip"
 						download
 						className="rounded bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-500"
 					>
