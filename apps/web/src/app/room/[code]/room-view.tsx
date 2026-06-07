@@ -121,6 +121,22 @@ function IconMicOff() {
   );
 }
 
+function IconHeadphones() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4">
+      <path d="M12 3a8 8 0 0 0-8 8v5a3 3 0 0 0 3 3h1a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2H6.1a6 6 0 0 1 11.8 0H16a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h1a3 3 0 0 0 3-3v-5a8 8 0 0 0-8-8z" />
+    </svg>
+  );
+}
+
+function IconChevronRight() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4">
+      <path d="M9.29 6.71a1 1 0 0 0 0 1.41L13.17 12l-3.88 3.88a1 1 0 1 0 1.41 1.41l4.59-4.58a1 1 0 0 0 0-1.42L10.7 6.7a1 1 0 0 0-1.41.01z" />
+    </svg>
+  );
+}
+
 function IconCheck() {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4">
@@ -170,6 +186,7 @@ function Slider({ value, min = 0, max = 1, step = 0.01, disabled, trackColor = "
 }
 
 const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] as const;
+const COLLAPSED_BAR_MAX_AVATARS = 5;
 
 // ─── RoomView ─────────────────────────────────────────────────────────────────
 
@@ -179,7 +196,6 @@ export function RoomView({ code }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const livekitRoom = useRef<Room | null>(null);
-  const peersRef = useRef<HTMLDivElement>(null);
   const speedRef = useRef<HTMLDivElement>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const controlsHovered = useRef(false);
@@ -211,8 +227,10 @@ export function RoomView({ code }: Props) {
   const [micEnabledIds, setMicEnabledIds] = useState<Set<string>>(new Set());
   const [selectedMic, setSelectedMic] = useState("");
   const [selectedSpeaker, setSelectedSpeaker] = useState("");
+  const [micDevices, setMicDevices] = useState<MediaDeviceInfo[]>([]);
+  const [speakerDevices, setSpeakerDevices] = useState<MediaDeviceInfo[]>([]);
+  const [voiceSidebarOpen, setVoiceSidebarOpen] = useState(false);
 
-  const [showPeers, setShowPeers] = useState(false);
   const [showSpeed, setShowSpeed] = useState(false);
   const [showControls, setShowControls] = useState(true);
   const [hud, setHud] = useState<{ type: "play" | "pause" | "back" | "fwd"; secs?: number; key: number } | null>(null);
@@ -403,6 +421,47 @@ export function RoomView({ code }: Props) {
       .finally(() => setVoiceBusy(false));
   }, [voiceTalking, voiceBusy, selectedMic]);
 
+  // ── Voice device enumeration (sidebar pickers) ────────────────────────────
+  // Mic permission was already granted in JoinPrompt, so labels are populated.
+  // Re-enumerate on devicechange (plug/unplug headset, etc).
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      navigator.mediaDevices?.enumerateDevices().then((devices) => {
+        if (cancelled) return;
+        setMicDevices(devices.filter((d) => d.kind === "audioinput"));
+        setSpeakerDevices(devices.filter((d) => d.kind === "audiooutput"));
+      });
+    };
+    refresh();
+    navigator.mediaDevices?.addEventListener("devicechange", refresh);
+    return () => {
+      cancelled = true;
+      navigator.mediaDevices?.removeEventListener("devicechange", refresh);
+    };
+  }, []);
+
+  // `setMicrophoneEnabled(true, { deviceId })` only applies constraints when
+  // creating a track — it's a no-op once one is already published. Switching
+  // the active device live (and persisting the choice) needs switchActiveDevice.
+  const changeMic = useCallback((deviceId: string) => {
+    setSelectedMic(deviceId);
+    sessionStorage.setItem("voice_mic", deviceId);
+    if (!deviceId) return;
+    livekitRoom.current?.switchActiveDevice("audioinput", deviceId).catch((err: Error) => {
+      console.error("[cinema] mic switch failed:", err);
+      setLivekitError(err.message ?? "No se pudo cambiar de micrófono");
+    });
+  }, []);
+
+  // Applying sinkId per-element (below, via the "Voice output device sync"
+  // effect) is enough — switchActiveDevice("audiooutput") additionally
+  // requires webAudioMix on some browsers and would just duplicate the work.
+  const changeSpeaker = useCallback((deviceId: string) => {
+    setSelectedSpeaker(deviceId);
+    sessionStorage.setItem("voice_speaker", deviceId);
+  }, []);
+
   // ── Volume sync ───────────────────────────────────────────────────────────
   useEffect(() => {
     if (audioRef.current) {
@@ -421,7 +480,6 @@ export function RoomView({ code }: Props) {
   // ── Click-outside to close dropdowns ─────────────────────────────────────
   useEffect(() => {
     function onMouseDown(e: MouseEvent) {
-      if (peersRef.current && !peersRef.current.contains(e.target as Node)) setShowPeers(false);
       if (speedRef.current && !speedRef.current.contains(e.target as Node)) setShowSpeed(false);
     }
     document.addEventListener("mousedown", onMouseDown);
@@ -575,12 +633,16 @@ export function RoomView({ code }: Props) {
     );
   }
 
-  const overlayVisible = showControls || showPeers || showSpeed;
+  const overlayVisible = showControls || showSpeed;
 
   return (
     <div
       ref={mainRef}
-      className={`relative h-screen overflow-hidden select-none bg-black text-white ${overlayVisible ? "cursor-auto" : "cursor-none"}`}
+      className="relative flex h-screen overflow-hidden select-none bg-black text-white"
+    >
+    {/* ── Player pane (video + overlay chrome) ───────────────────────────── */}
+    <div
+      className={`relative h-full flex-1 overflow-hidden ${overlayVisible ? "cursor-auto" : "cursor-none"}`}
       onMouseMove={revealControls}
       onMouseLeave={() => { if (hideTimer.current) clearTimeout(hideTimer.current); setShowControls(false); }}
     >
@@ -612,6 +674,44 @@ export function RoomView({ code }: Props) {
         />
       )}
 
+      {/* ── Collapsed voice overlay (Discord-style mini call bar) ─────────── */}
+      {!voiceSidebarOpen && peers.length > 0 && (
+        <button
+          onClick={() => setVoiceSidebarOpen(true)}
+          title="Mostrar chat de voz"
+          className="group absolute right-3 top-16 z-30 flex max-w-[13rem] items-center gap-2 rounded-full border border-white/10 bg-black/55 py-1.5 pl-1.5 pr-3 shadow-lg backdrop-blur-md transition-colors hover:bg-black/70"
+        >
+          <span className="flex -space-x-2">
+            {peers.slice(0, COLLAPSED_BAR_MAX_AVATARS).map((p) => {
+              const speaking = speakingIds.has(p.id);
+              const micOn = micEnabledIds.has(p.id);
+              return (
+                <span key={p.id} className="relative">
+                  <span
+                    className={`flex h-7 w-7 items-center justify-center rounded-full border-2 border-black/40 bg-gradient-to-br from-blue-500 to-violet-600 text-xs font-bold transition-shadow ${
+                      speaking ? "ring-2 ring-green-400" : ""
+                    }`}
+                    title={p.name}
+                  >
+                    {p.name[0]?.toUpperCase()}
+                  </span>
+                  {!micOn && (
+                    <span
+                      className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-neutral-700 ring-1 ring-black/60"
+                      title="Silenciado"
+                    />
+                  )}
+                </span>
+              );
+            })}
+          </span>
+          {peers.length > COLLAPSED_BAR_MAX_AVATARS && (
+            <span className="shrink-0 text-xs font-medium text-neutral-300">+{peers.length - COLLAPSED_BAR_MAX_AVATARS}</span>
+          )}
+          <IconChevronRight />
+        </button>
+      )}
+
       {/* ── Overlay chrome (header + controls) ──────────────────────────── */}
       <div
         className={`pointer-events-none absolute inset-0 flex flex-col justify-between transition-opacity duration-300 ${overlayVisible ? "opacity-100" : "opacity-0"}`}
@@ -638,58 +738,18 @@ export function RoomView({ code }: Props) {
               )}
             </div>
 
-            {/* Participants dropdown */}
-            <div className="relative" ref={peersRef}>
-              <button
-                onClick={() => setShowPeers((v) => !v)}
-                className="flex items-center gap-2 rounded-full px-3 py-1.5 text-sm text-white transition-colors hover:bg-white/10"
-              >
-                <IconPeople />
-                <span className="font-medium">{peers.length}</span>
-              </button>
-
-              {showPeers && (
-                <div className="absolute right-0 top-full z-50 mt-2 w-64 overflow-hidden rounded-xl border border-white/10 bg-neutral-900 shadow-2xl">
-                  <div className="border-b border-white/10 px-4 py-2.5">
-                    <span className="text-xs font-semibold uppercase tracking-wider text-neutral-400">
-                      Participantes ({peers.length})
-                    </span>
-                  </div>
-                  <ul className="max-h-64 overflow-y-auto py-1">
-                    {peers.map((p) => {
-                      const speaking = speakingIds.has(p.id);
-                      const micOn = micEnabledIds.has(p.id);
-                      return (
-                        <li key={p.id} className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-white/5">
-                          <span
-                            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-violet-600 text-sm font-bold transition-shadow ${
-                              speaking ? "ring-2 ring-green-400" : ""
-                            }`}
-                          >
-                            {p.name[0]?.toUpperCase()}
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-medium">{p.name}</p>
-                            <p className="text-xs capitalize text-neutral-400">{p.role}</p>
-                          </div>
-                          <span
-                            className={micOn ? "text-green-400" : "text-neutral-600"}
-                            title={micOn ? "Hablando habilitado" : "Silenciado"}
-                          >
-                            {micOn ? <IconMic /> : <IconMicOff />}
-                          </span>
-                          {p.role === "host" && (
-                            <span className="shrink-0 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-400">
-                              host
-                            </span>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              )}
-            </div>
+            {/* Voice chat sidebar toggle */}
+            <button
+              onClick={() => setVoiceSidebarOpen((v) => !v)}
+              className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-sm transition-colors ${
+                voiceSidebarOpen ? "bg-white/15 text-white" : "text-white hover:bg-white/10"
+              }`}
+              title={voiceSidebarOpen ? "Ocultar chat de voz" : "Mostrar chat de voz"}
+            >
+              <IconPeople />
+              <span className="font-medium">{peers.length}</span>
+              {speakingIds.size > 0 && <span className="h-1.5 w-1.5 rounded-full bg-green-400" />}
+            </button>
           </header>
 
           {/* LiveKit error banner */}
@@ -893,7 +953,185 @@ export function RoomView({ code }: Props) {
           </div>
         </div>
       )}
+    </div>{/* end player pane */}
+
+    {/* ── Voice chat sidebar (Discord-style member list + controls) ──────── */}
+    <VoiceSidebar
+      open={voiceSidebarOpen}
+      onClose={() => setVoiceSidebarOpen(false)}
+      peers={peers}
+      speakingIds={speakingIds}
+      micEnabledIds={micEnabledIds}
+      voiceTalking={voiceTalking}
+      voiceBusy={voiceBusy}
+      onToggleVoice={toggleVoice}
+      micDevices={micDevices}
+      speakerDevices={speakerDevices}
+      selectedMic={selectedMic}
+      selectedSpeaker={selectedSpeaker}
+      onChangeMic={changeMic}
+      onChangeSpeaker={changeSpeaker}
+    />
     </div>
+  );
+}
+
+// ─── VoiceSidebar ─────────────────────────────────────────────────────────────
+
+interface VoiceSidebarProps {
+  open: boolean;
+  onClose: () => void;
+  peers: PeerInfo[];
+  speakingIds: Set<string>;
+  micEnabledIds: Set<string>;
+  voiceTalking: boolean;
+  voiceBusy: boolean;
+  onToggleVoice: () => void;
+  micDevices: MediaDeviceInfo[];
+  speakerDevices: MediaDeviceInfo[];
+  selectedMic: string;
+  selectedSpeaker: string;
+  onChangeMic: (deviceId: string) => void;
+  onChangeSpeaker: (deviceId: string) => void;
+}
+
+function VoiceSidebar({
+  open,
+  onClose,
+  peers,
+  speakingIds,
+  micEnabledIds,
+  voiceTalking,
+  voiceBusy,
+  onToggleVoice,
+  micDevices,
+  speakerDevices,
+  selectedMic,
+  selectedSpeaker,
+  onChangeMic,
+  onChangeSpeaker,
+}: VoiceSidebarProps) {
+  return (
+    <aside
+      className={`relative h-full shrink-0 overflow-hidden border-l border-white/10 bg-neutral-950 transition-[width] duration-200 ease-out ${
+        open ? "w-72" : "w-0 border-l-0"
+      }`}
+    >
+      <div className="flex h-full w-72 flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+          <div className="flex items-center gap-2">
+            <IconMic />
+            <span className="text-sm font-semibold">Chat de voz</span>
+            <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[11px] font-medium text-neutral-400">
+              {peers.length}
+            </span>
+          </div>
+          <button
+            onClick={onClose}
+            className="flex h-7 w-7 items-center justify-center rounded-full text-neutral-400 transition-colors hover:bg-white/10 hover:text-white"
+            title="Ocultar chat de voz"
+          >
+            <span className="rotate-180 inline-flex"><IconChevronRight /></span>
+          </button>
+        </div>
+
+        {/* Participant list */}
+        <ul className="flex-1 overflow-y-auto px-2 py-2">
+          {peers.map((p) => {
+            const speaking = speakingIds.has(p.id);
+            const micOn = micEnabledIds.has(p.id);
+            return (
+              <li
+                key={p.id}
+                className={`flex items-center gap-3 rounded-lg px-2 py-2 transition-colors ${
+                  speaking ? "bg-green-500/10" : "hover:bg-white/5"
+                }`}
+              >
+                <span
+                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-violet-600 text-sm font-bold ring-2 transition-all ${
+                    speaking ? "ring-green-400" : "ring-transparent"
+                  }`}
+                >
+                  {p.name[0]?.toUpperCase()}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className={`truncate text-sm font-medium ${speaking ? "text-green-300" : "text-white"}`}>
+                    {p.name}
+                  </p>
+                  <p className="text-xs capitalize text-neutral-500">{p.role === "host" ? "host" : "viewer"}</p>
+                </div>
+                <span
+                  className={micOn ? "text-green-400" : "text-neutral-600"}
+                  title={micOn ? "Hablando habilitado" : "Silenciado"}
+                >
+                  {micOn ? <IconMic /> : <IconMicOff />}
+                </span>
+              </li>
+            );
+          })}
+          {peers.length === 0 && (
+            <li className="px-2 py-6 text-center text-xs text-neutral-500">Nadie más en la sala todavía.</li>
+          )}
+        </ul>
+
+        {/* Controls footer */}
+        <div className="border-t border-white/10 bg-neutral-900/60 p-3">
+          <div className="mb-3 flex items-center gap-2">
+            <button
+              onClick={onToggleVoice}
+              disabled={voiceBusy}
+              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-50 ${
+                voiceTalking
+                  ? "bg-green-600 text-white hover:bg-green-500"
+                  : "bg-white/10 text-white/80 hover:bg-white/15 hover:text-white"
+              }`}
+              title={voiceTalking ? "Silenciar micrófono" : "Hablar con la sala"}
+            >
+              {voiceTalking ? <IconMic /> : <IconMicOff />}
+            </button>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium text-white">
+                {voiceTalking ? "Hablando" : "Silenciado"}
+              </p>
+              <p className="truncate text-xs text-neutral-500">Clic para {voiceTalking ? "silenciarte" : "hablar"}</p>
+            </div>
+          </div>
+
+          <label className="mb-2 flex flex-col gap-1">
+            <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
+              <IconMic /> Micrófono
+            </span>
+            <select
+              value={selectedMic}
+              onChange={(e) => onChangeMic(e.target.value)}
+              className="rounded-lg border border-white/10 bg-neutral-800 px-2 py-1.5 text-xs text-white outline-none transition-colors focus:border-white/30"
+            >
+              <option value="">Predeterminado</option>
+              {micDevices.map((d, i) => (
+                <option key={d.deviceId} value={d.deviceId}>{d.label || `Micrófono ${i + 1}`}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
+              <IconHeadphones /> Audífonos / altavoz
+            </span>
+            <select
+              value={selectedSpeaker}
+              onChange={(e) => onChangeSpeaker(e.target.value)}
+              className="rounded-lg border border-white/10 bg-neutral-800 px-2 py-1.5 text-xs text-white outline-none transition-colors focus:border-white/30"
+            >
+              <option value="">Predeterminado</option>
+              {speakerDevices.map((d, i) => (
+                <option key={d.deviceId} value={d.deviceId}>{d.label || `Altavoz ${i + 1}`}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </div>
+    </aside>
   );
 }
 
