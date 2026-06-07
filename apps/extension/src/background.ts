@@ -215,12 +215,36 @@ async function startCapture(tabId: number, livekitUrl: string, livekitToken: str
     offscreenCreated = false;
   }
 
+  // Register listener BEFORE createDocument so we don't miss OFFSCREEN_READY
+  // if the document loads before we start listening.
+  type MsgHandler = Parameters<typeof chrome.runtime.onMessage.addListener>[0];
+  let readyHandler!: MsgHandler;
+  const readyPromise = new Promise<void>((resolve) => {
+    readyHandler = (msg: { type?: string }) => {
+      if (msg?.type === "OFFSCREEN_READY") {
+        chrome.runtime.onMessage.removeListener(readyHandler);
+        resolve();
+      }
+    };
+    chrome.runtime.onMessage.addListener(readyHandler);
+  });
+
   await chrome.offscreen.createDocument({
     url: chrome.runtime.getURL("offscreen.html"),
     reasons: [chrome.offscreen.Reason.USER_MEDIA],
     justification: "Capturar pestaña y publicar a LiveKit",
   });
   offscreenCreated = true;
+
+  // Wait for offscreen to signal readiness (2 s fallback in case signal was missed)
+  await Promise.race([
+    readyPromise,
+    new Promise<void>((r) => setTimeout(() => {
+      chrome.runtime.onMessage.removeListener(readyHandler);
+      warn("[cinema bg] OFFSCREEN_READY timeout — proceeding anyway");
+      r();
+    }, 2000)),
+  ]);
 
   const streamId = await getTabCaptureStreamId(tabId);
   chrome.runtime.sendMessage({ type: "START_PUBLISH", streamId, livekitUrl, livekitToken });
